@@ -13,7 +13,9 @@ jobs:
             - name: Get changed files
               id: changed-files
               run: |
-                    echo "changed_files=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | xargs)" >> $GITHUB_OUTPUT
+                    # List changed files by comparing to the default branch
+                    echo "changed_files=$(git diff --name-only "origin/${{ github.event.repository.default_branch }}...HEAD" | xargs)" \
+                    >> $GITHUB_OUTPUT
             - name: Create xml files in .last-modified folder
               run: |
                     for file in ${{ steps.changed-files.outputs.changed_files }}; do
@@ -27,21 +29,21 @@ jobs:
                         return 1
                     fi
                     
-                    # Get last commit date in ISO format    
+                    # Get last commit date in ISO format
                     if ! iso=$(git log -1 --format=%cd --date=format-local:'%Y-%m-%dT%H:%M:%S%z' "$file"); then
                         echo "Error: Failed to get git log for '$file'" >&2
-                        return 1
+                        exit 1
                     fi
                     if ! datetime=$(git log -1 --format=%cd --date=iso-strict-local "$file"); then
                         echo "Error: Failed to get git log for '$file'" >&2
-                        return 1
+                        exit 1
                     fi
                 
                     # Create output directory structure
                     dir=$(dirname ".last-modified/$file")
                     if ! mkdir -p "$dir"; then
                         echo "Error: Failed to create directory '$dir'" >&2
-                        return 1
+                        exit 1
                     fi
                     
                     # Replace any forward slashes in path with underscores for xml:id
@@ -51,24 +53,24 @@ jobs:
                     if [[ "$OSTYPE" == "darwin"* ]]; then
                         if ! seconds_since_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S%z" "$iso" "+%s"); then
                             echo "Error: Failed to convert date for '$file'" >&2
-                            return 1
+                            exit 1
                         fi
                     else
                         if ! seconds_since_epoch=$(date -d "$iso" +%s); then
                             echo "Error: Failed to convert date for '$file'" >&2
-                            return 1
+                            exit 1
                         fi
                     fi
                     
                     # Write XML files
                     if ! echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" > ".last-modified/$file"; then
                         echo "Error: Failed to write XML header for '$file'" >&2
-                        return 1
+                        exit 1
                     fi
                     
                     if ! echo "<last-modified xml:id=\"$xml_id\" seconds_since_epoch=\"$seconds_since_epoch\">$datetime</last-modified>" >> ".last-modified/$file"; then
                         echo "Error: Failed to write XML content for '$file'" >&2
-                        return 1
+                        exit 1
                     fi
                     echo "Successfully created .last-modified/$file"
                     done
