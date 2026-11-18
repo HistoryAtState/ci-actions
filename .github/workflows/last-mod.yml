@@ -2,6 +2,20 @@ name: calculate last-modified data
 
 on:
   workflow_call:
+    inputs:
+      include:
+        description: >-
+          Whitespace-separated bash glob patterns (matched against the
+          repo-relative path; `*` also matches `/`). Only matching files get a
+          .last-modified entry. hsg-shell only looks up `<id>.xml`.
+        type: string
+        default: '*.xml'
+      exclude:
+        description: >-
+          Whitespace-separated bash glob patterns of files to skip even if they
+          match `include`. Defaults to the build/packaging XML at the repo root.
+        type: string
+        default: 'build.xml build.properties.xml expath-pkg.xml repo.xml'
 
 jobs:
     generate-lastmod:
@@ -15,12 +29,38 @@ jobs:
               run: |
                     # Include deleted files so their last-modified entries can be removed.
                     echo "changed_files=$(git diff --name-only "origin/${{ github.event.repository.default_branch }}...HEAD" | xargs)" \
-                    >> $GITHUB_OUTPUT
+                    >> "$GITHUB_OUTPUT"
             - name: Create xml files in .last-modified folder
+              env:
+                INCLUDE: ${{ inputs.include }}
+                EXCLUDE: ${{ inputs.exclude }}
               run: |
+                    # Patterns must not be expanded against the working tree.
+                    set -f
+
+                    matches_any() {
+                        local path=$1 pattern
+                        shift
+                        for pattern in "$@"; do
+                            # shellcheck disable=SC2254 # pattern is meant to glob
+                            case "$path" in $pattern) return 0 ;; esac
+                        done
+                        return 1
+                    }
+
+                    # Is a last-modified entry wanted for this repo-relative path?
+                    is_tracked() {
+                        # Skip dotfiles and files in hidden folders (starting with .)
+                        [[ "$1" =~ ^\. ]] && return 1
+                        # shellcheck disable=SC2086 # split patterns into words
+                        matches_any "$1" $INCLUDE || return 1
+                        # shellcheck disable=SC2086
+                        matches_any "$1" $EXCLUDE && return 1
+                        return 0
+                    }
+
                     for file in ${{ steps.changed-files.outputs.changed_files }}; do
-                    # Skip files in hidden folders (starting with .)
-                    if [[ "$file" =~ ^\..*/ ]]; then
+                    if ! is_tracked "$file"; then
                         continue
                     fi
                     
@@ -79,6 +119,17 @@ jobs:
                     fi
                     echo "Successfully created .last-modified/$file"
                     done
+
+                    # Prune entries that are no longer covered by include/exclude
+                    # (e.g. stubs for package.json created by earlier versions).
+                    if [ -d .last-modified ]; then
+                        while IFS= read -r -d '' entry; do
+                            if ! is_tracked "${entry#.last-modified/}"; then
+                                rm -- "$entry"
+                                echo "Pruned $entry"
+                            fi
+                        done < <(find .last-modified -type f -print0)
+                    fi
             - name: Commit and Push
               uses: actions-x/commit@v6
               with:
